@@ -208,7 +208,7 @@ cp -r skills/deploy-telegram .claude/skills/
 | 僵尸 bun/claude 进程 | Telegram 409 Conflict 错误 | 重启前先杀掉所有相关进程 |
 | 在无头服务器上运行 `setup-token` | "Raw mode is not supported" 错误 | 在有浏览器的机器上运行，将 Token 复制到服务器 |
 | 环境变量名错误 | 认证静默失败 | 使用 `CLAUDE_CODE_OAUTH_TOKEN`（不是 `CLAUDE_CODE_USE_CLAUDE_AI_TOKEN`） |
-| 中国大陆服务器 | 所有网络检查失败 | 使用港、新、日、美、欧等地区的服务器 |
+| 服务器 | 所有网络检查失败 | 使用港、新、日、美、欧等地区的服务器 |
 
 ### 架构图
 
