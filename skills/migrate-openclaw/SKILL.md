@@ -43,7 +43,7 @@ Before migrating, understand what you're working with. A real OpenClaw installat
     └── skills/            # Agent-local inline skills (*.skill files or subdirs)
 ```
 
-There may also be `workspace-{agent-name}/` directories for secondary agents (e.g. `workspace-miah/`).
+There may also be `workspace-{agent-name}/` directories for secondary agents (e.g. `workspace-work/`).
 
 ## Compatibility Matrix
 
@@ -71,7 +71,7 @@ There may also be `workspace-{agent-name}/` directories for secondary agents (e.
 |-----------|--------|---------|
 | `OPENCLAW_DIR` | absolute path | `/home/ubuntu/.openclaw` |
 | `TARGET_DIR` | absolute path | `/home/ubuntu/claude-migration` |
-| `AGENT_NAME` | agent name | `main` (default) or `miah` |
+| `AGENT_NAME` | agent name | `main` (default) or `work` |
 
 `AGENT_NAME` determines which `agents/{name}/` and `workspace/` (or `workspace-{name}/`) to use. Default to `main`.
 
@@ -203,7 +203,7 @@ Read `${WORKSPACE}/MEMORY.md`. Parse its top-level sections (e.g. `## People`, `
 | Ongoing projects, goals, context | `project` |
 | External systems, URLs, tools | `reference` |
 
-Create one memory file per meaningful section in `${TARGET_DIR}/memory/`. Name files descriptively (e.g. `user_profile.md`, `project_cmg_work.md`, `feedback_work_rules.md`, `reference_server_infra.md`).
+Create one memory file per meaningful section in `${TARGET_DIR}/memory/`. Name files descriptively (e.g. `user_profile.md`, `project_main.md`, `feedback_work_rules.md`, `reference_server_infra.md`).
 
 Write `${TARGET_DIR}/memory/MEMORY.md` as the Claude Code index.
 
@@ -413,7 +413,7 @@ Problem: Model not working after migration
    Example: "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6"
    For non-Anthropic models, Claude Code uses MCP or API key config — different setup required.
 
-Problem: Secondary agent (e.g. workspace-miah/) not migrated
-└─ Re-run this skill with AGENT_NAME set to the secondary agent name (e.g. "miah")
+Problem: Secondary agent (e.g. workspace-work/) not migrated
+└─ Re-run this skill with AGENT_NAME set to the secondary agent name (e.g. "work")
    Each agent becomes a separate Claude Code project or a separate CLAUDE.md profile.
 ```
