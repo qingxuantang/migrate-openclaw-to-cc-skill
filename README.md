@@ -10,7 +10,7 @@
 
 ## English
 
-Open-source skills for deploying Claude Code on remote servers with Telegram integration, and migrating from OpenClaw.
+Open-source skills for deploying Claude Code on remote servers with Telegram integration, and for migrating a full OpenClaw agent (Soul, Memory, Skills, workspace identity) over to Claude Code.
 
 > **Background**: As of April 5, 2026, Anthropic blocked OpenClaw from using Claude Pro/Max subscriptions. These skills provide a first-party alternative using Claude Code's native Channels feature.
 
@@ -24,25 +24,37 @@ Deploy Claude Code on a remote Linux server and connect it to Telegram for remot
 - Installs Node.js, Claude Code, tmux, and Bun on the server
 - Configures authentication via OAuth token
 - Installs the official Telegram channel plugin
-- Sets up systemd service for auto-start on reboot
-- Handles all interactive dialogs automatically
+- Writes `settings.json` with the mandatory `channelsEnabled: true` flag
+- Creates a startup script with auto-restart loop
+- Sets up a systemd user service for auto-start on reboot
+- Handles all interactive dialogs automatically (trust folder, bypass permissions)
 
 **Requirements:**
 - Linux server with SSH access
-- Telegram bot token (from @BotFather)
-- Claude OAuth token (from `claude setup-token`)
-- Server must reach: api.telegram.org, github.com, api.anthropic.com
+- Telegram bot token (from @BotFather) — must be a **fresh** bot, not one already used by another tool
+- Claude OAuth token (from `claude setup-token` on a machine with a browser)
+- Server must reach: `api.telegram.org`, `github.com`, `api.anthropic.com`
 
 #### 🔄 [migrate-openclaw](skills/migrate-openclaw/SKILL.md)
 
-Migrate OpenClaw skills, agents, and configuration to Claude Code format.
+Migrate a complete OpenClaw agent to Claude Code — not just files, but the full identity, memory, and deployment.
 
 **What it does:**
-- Inventories all OpenClaw assets (skills, agents, MCP configs, .env files)
-- Copies custom skills directly (format is identical)
-- Converts agents (agent.md → SKILL.md with frontmatter)
-- Backs up MCP server configs and environment files
-- Generates a migration report with post-migration checklist
+- Inventories the real OpenClaw structure (`workspace/SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `TOOLS.md`, `MEMORY.md`, `memory/`, `skills/`, `agents/{name}/agent/agent.yaml`, `openclaw.json`)
+- Merges `SOUL.md` + `AGENTS.md` + `IDENTITY.md` + `TOOLS.md` into a single `CLAUDE.md`
+- Auto-appends a **mandatory Telegram Channel reply-tool rule** to `CLAUDE.md` (fixes a real production bug — see Key Learnings)
+- Parses `MEMORY.md` into Claude Code's typed memory files (`user` / `feedback` / `project` / `reference`)
+- Archives daily memory logs for manual review
+- Copies all global and workspace-local skills (format is identical)
+- Extracts environment variables from `openclaw.json` for `settings.json`
+- Extracts and converts the model ID from `agent.yaml` (strips the `anthropic/` provider prefix)
+- Provides per-plugin migration guidance (telegram → deploy-telegram skill, duckduckgo → built-in WebSearch, etc.)
+- Supports multi-agent setups (`workspace-{name}/` via the `AGENT_NAME` parameter)
+- **Physically deploys** the migrated files into `~/.claude/` (not just a staging dir)
+- Optionally creates `start-claude.sh` and launches it in tmux with the Telegram channel attached
+- Never stops OpenClaw — designed for dual-track (OpenClaw + Claude Code running in parallel)
+
+**Each step is tagged with an automation policy:** 🤖 AUTO / 🟡 AUTO-FIRST / 👤 MANUAL / 🚫 DO NOT — so agents know exactly what to execute and what to hand back to the user.
 
 ### Design: Agent-First
 
@@ -83,7 +95,7 @@ cp -r skills/deploy-telegram .claude/skills/
 
 ### Key Learnings
 
-Hard-won discoveries from the deployment process:
+Hard-won discoveries from real deployments:
 
 | Pitfall | Symptom | Fix |
 |---------|---------|-----|
@@ -93,6 +105,30 @@ Hard-won discoveries from the deployment process:
 | `setup-token` on headless server | "Raw mode is not supported" error | Run on machine with browser, copy token to server |
 | Wrong env var name | Auth fails silently | Use `CLAUDE_CODE_OAUTH_TOKEN` (not `CLAUDE_CODE_USE_CLAUDE_AI_TOKEN`) |
 | Mainland China servers | All network checks fail | Use servers in HK, SG, JP, US, EU |
+| Plugin installed but disabled | Plugin shows `✘ disabled` in `claude plugin list` | `claude plugin enable telegram@claude-plugins-official` |
+| Reusing OpenClaw's bot token for Claude Code | Telegram 409 Conflict (two polls) | Always create a **new** bot from @BotFather |
+| Missing `--channels` flag in startup script | Bun MCP server never spawns | Add `--channels plugin:telegram@claude-plugins-official` |
+| **Claude replies in terminal but user gets nothing** | tmux pane shows the reply, Telegram does not | Claude forgot to call `plugin:telegram:telegram - reply` MCP tool. Add the Telegram Channel reply-tool rule to `CLAUDE.md` and restart the session |
+| Migrate-openclaw v1: files staged but not deployed | User sees staging dir but Claude Code sees nothing | Skill now has an explicit Step 9 that copies into `~/.claude/` |
+| NVM not on PATH in non-interactive shells | `claude: command not found` in startup script | Source NVM in `~/.bashrc` and in `start-claude.sh` |
+
+### The Telegram Channel Reply-Tool Rule
+
+If you have a `CLAUDE.md` on a server running Claude Code with the Telegram channel, append this rule. It prevents a silent failure mode where Claude generates a reply but never actually sends it back to the user.
+
+```markdown
+## Telegram Channel 强制规则（最高优先级 / Highest Priority）
+
+When a message arrives via the Telegram channel (you see `← telegram · <user_id>:` in your input), you **MUST** reply by calling the `plugin:telegram:telegram - reply` MCP tool. Terminal text output is **NOT** delivered to the user — only explicit tool calls are.
+
+Rules:
+1. Every Telegram user message must be followed by at least one `plugin:telegram:telegram - reply` tool call.
+2. Do not assume follow-up replies in the same session send automatically. Each new message needs its own explicit reply call.
+3. Markdown written to the terminal is invisible to the user unless passed through the reply tool.
+4. The task is not complete until the reply tool has been called successfully.
+```
+
+The `migrate-openclaw` skill appends this automatically when generating `CLAUDE.md`.
 
 ### Architecture
 
@@ -126,7 +162,7 @@ Hard-won discoveries from the deployment process:
 
 ## 中文
 
-开源技能集：在远程服务器上部署 Claude Code 并通过 Telegram 进行远程访问，以及从 OpenClaw 迁移。
+开源技能集：在远程服务器上部署 Claude Code 并通过 Telegram 进行远程访问，以及把一整个 OpenClaw agent（Soul、Memory、Skills、workspace 身份）完整迁移到 Claude Code。
 
 > **背景**：2026 年 4 月 5 日起，Anthropic 封禁了 OpenClaw 使用 Claude Pro/Max 订阅。本项目提供基于 Claude Code 原生 Channels 功能的第一方替代方案。
 
@@ -140,25 +176,37 @@ Hard-won discoveries from the deployment process:
 - 在服务器上安装 Node.js、Claude Code、tmux 和 Bun
 - 通过 OAuth Token 配置身份认证
 - 安装官方 Telegram 频道插件
-- 配置 systemd 服务实现开机自启
-- 自动处理所有交互式对话框
+- 写入带有强制 `channelsEnabled: true` 的 `settings.json`
+- 生成带自动重启循环的启动脚本
+- 配置 systemd user service 实现开机自启
+- 自动处理所有交互式对话框（trust folder、bypass permissions）
 
 **前置条件：**
 - 具有 SSH 访问权限的 Linux 服务器
-- Telegram Bot Token（通过 @BotFather 创建）
-- Claude OAuth Token（通过 `claude setup-token` 获取）
-- 服务器必须能访问：api.telegram.org、github.com、api.anthropic.com
+- Telegram Bot Token（通过 @BotFather 创建）—— 必须是**全新的** bot，不能和其他工具共用
+- Claude OAuth Token（在有浏览器的机器上运行 `claude setup-token` 获取）
+- 服务器必须能访问：`api.telegram.org`、`github.com`、`api.anthropic.com`
 
 #### 🔄 [migrate-openclaw](skills/migrate-openclaw/SKILL.md) — 迁移 OpenClaw
 
-将 OpenClaw 的技能、代理和配置迁移到 Claude Code 格式。
+把一整个 OpenClaw agent 完整迁移到 Claude Code —— 不只是文件转换，还包括身份、记忆、部署全流程。
 
 **功能：**
-- 清点所有 OpenClaw 资产（技能、代理、MCP 配置、.env 文件）
-- 直接复制自定义技能（格式完全相同）
-- 转换代理（agent.md → SKILL.md + YAML 头部信息）
-- 备份 MCP 服务器配置和环境变量文件
-- 生成迁移报告和迁移后检查清单
+- 清点真实的 OpenClaw 目录结构（`workspace/SOUL.md`、`AGENTS.md`、`IDENTITY.md`、`TOOLS.md`、`MEMORY.md`、`memory/`、`skills/`、`agents/{name}/agent/agent.yaml`、`openclaw.json`）
+- 把 `SOUL.md` + `AGENTS.md` + `IDENTITY.md` + `TOOLS.md` 合并成单个 `CLAUDE.md`
+- 在 `CLAUDE.md` 末尾**自动追加 Telegram Channel 回复工具强制规则**（修复真实踩过的坑，见踩坑经验）
+- 把 `MEMORY.md` 解析成 Claude Code 的 typed memory 文件（`user` / `feedback` / `project` / `reference` 四类）
+- 把每日记忆日志归档到 `archive/` 供手动 review
+- 复制所有全局和 workspace 级别的 skills（格式完全相同）
+- 从 `openclaw.json` 提取环境变量供 `settings.json` 使用
+- 从 `agent.yaml` 提取并转换模型 ID（自动去掉 `anthropic/` 前缀）
+- 对每个插件给出迁移建议（telegram → deploy-telegram skill；duckduckgo → 内置 WebSearch 等）
+- 支持多 agent 场景（通过 `AGENT_NAME` 参数迁移 `workspace-{name}/`）
+- **实际把迁移产物部署到 `~/.claude/`**，不只是生成 staging 目录
+- 可选地生成 `start-claude.sh` 并用 tmux 启动，自动挂上 Telegram channel
+- 绝不停 OpenClaw —— 设计为双轨运行（OpenClaw 和 Claude Code 并行）
+
+**每个步骤都有自动化策略标签：** 🤖 AUTO / 🟡 AUTO-FIRST / 👤 MANUAL / 🚫 DO NOT，让 agent 明确知道哪些自动执行、哪些交给用户。
 
 ### 设计理念：Agent-First（代理优先）
 
@@ -199,7 +247,7 @@ cp -r skills/deploy-telegram .claude/skills/
 
 ### 踩坑经验
 
-部署过程中的血泪教训：
+真实部署中的血泪教训：
 
 | 坑 | 症状 | 解决方案 |
 |----|------|----------|
@@ -208,7 +256,31 @@ cp -r skills/deploy-telegram .claude/skills/
 | 僵尸 bun/claude 进程 | Telegram 409 Conflict 错误 | 重启前先杀掉所有相关进程 |
 | 在无头服务器上运行 `setup-token` | "Raw mode is not supported" 错误 | 在有浏览器的机器上运行，将 Token 复制到服务器 |
 | 环境变量名错误 | 认证静默失败 | 使用 `CLAUDE_CODE_OAUTH_TOKEN`（不是 `CLAUDE_CODE_USE_CLAUDE_AI_TOKEN`） |
-| 服务器 | 所有网络检查失败 | 使用港、新、日、美、欧等地区的服务器 |
+| 中国大陆服务器 | 所有网络检查失败 | 使用港、新、日、美、欧等地区的服务器 |
+| 插件安装后状态为 disabled | `claude plugin list` 显示 `✘ disabled` | `claude plugin enable telegram@claude-plugins-official` |
+| Claude Code 复用了 OpenClaw 的 bot token | Telegram 409 Conflict（两端抢 long-polling） | 一定要用 @BotFather 新建一个 bot |
+| 启动脚本漏了 `--channels` 参数 | Bun MCP 服务器根本不会启动 | 加上 `--channels plugin:telegram@claude-plugins-official` |
+| **Claude 在终端里写了回复，但用户没收到** | tmux 里能看到回复文本，Telegram 没收到 | Claude 忘了调 `plugin:telegram:telegram - reply` MCP 工具。把 Telegram Channel 回复工具规则写进 `CLAUDE.md` 并重启 session |
+| v1 的 migrate-openclaw：文件只 staging 没部署 | 用户能看到 staging 目录，但 Claude Code 读不到任何东西 | 新版 Skill 增加了 Step 9，显式把文件复制到 `~/.claude/` |
+| 非交互式 shell 里 NVM 不在 PATH | 启动脚本里 `claude: command not found` | 在 `~/.bashrc` 和 `start-claude.sh` 里 source NVM |
+
+### Telegram Channel 回复工具规则
+
+如果你的服务器上运行着带 Telegram channel 的 Claude Code 且有 `CLAUDE.md`，务必把下面这条规则加进去。它防止一种静默失败：Claude 生成了回复，但从来没真正发回给用户。
+
+```markdown
+## Telegram Channel 强制规则（最高优先级）
+
+当消息来源是 Telegram channel（输入中看到 `← telegram · <user_id>:` 标记时），你**必须**通过调用 `plugin:telegram:telegram - reply` MCP 工具来回复用户，**不能**只在终端输出文本。终端里写的任何内容，用户在 Telegram 端**完全看不到**。
+
+规则：
+1. 每一条来自 Telegram 的用户消息，都必须对应**至少一次** `plugin:telegram:telegram - reply` 工具调用
+2. 不要假设同一 session 里后续回复会自动发出 —— 每一条新消息都要重新显式调用 reply 工具
+3. 终端里的 markdown / 代码块 / 解释，如果不通过 reply 工具发出，用户就收不到
+4. 回复工具调用成功前，不算任务完成
+```
+
+`migrate-openclaw` skill 在生成 `CLAUDE.md` 时会自动追加这条规则。
 
 ### 架构图
 
