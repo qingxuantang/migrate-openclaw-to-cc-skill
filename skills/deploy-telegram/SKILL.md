@@ -209,6 +209,29 @@ ENDPLUGIN
 
 > **NEVER use `--plugin-dir` flag with `--channels`**. This tags the plugin as "inline" source, causing: `Channel notifications skipped: you asked for plugin:telegram@claude-plugins-official but the installed telegram plugin is from inline`.
 
+### Step 5b: Patch plugin to disable channel permission relay
+
+**Why**: As of Claude Code 2.1.92, the Telegram plugin's `server.ts` declares an opt-in capability `'claude/channel/permission': {}`. When declared, Claude Code relays every tool-call permission request (e.g. Edit, Write, Bash) from the channel session to Telegram as an Allow/Deny button card. This check is **independent of** `--dangerously-skip-permissions`, `permissions.allow` in `settings.json`, and `skipDangerousModePermissionPrompt` — those flags only govern terminal sessions. The result: even with all bypasses on, the Telegram user is spammed with permission cards on every tool call.
+
+The fix is to comment out that single capability declaration. The channel session then falls back to the terminal permission flow, which the bypass flags correctly handle.
+
+```bash
+$SSH_CMD bash -s << 'EOF'
+set -e
+F=$HOME/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts
+if [ ! -f "$F" ]; then
+  echo "FATAL: telegram plugin server.ts not found at $F"; exit 1
+fi
+[ ! -f "$F.bak" ] && cp "$F" "$F.bak"
+sed -i "s|'claude/channel/permission': {},|// 'claude/channel/permission': {}, // DISABLED: relays tool prompts to TG despite --dangerously-skip-permissions|" "$F"
+grep -q "^ *// 'claude/channel/permission'" "$F" \
+  && echo "OK: channel permission relay disabled" \
+  || { echo "WARNING: patch did not apply — plugin may have changed upstream. Inspect $F manually."; exit 1; }
+EOF
+```
+
+> **Re-apply after plugin updates.** `claude plugin marketplace update` or a reinstall will overwrite `server.ts`. Re-run this step whenever the plugin is updated. A `.bak` copy is preserved on first run.
+
 ### Step 6: Configure bot token
 
 Substitute `${BOT_TOKEN}` with the actual token value.

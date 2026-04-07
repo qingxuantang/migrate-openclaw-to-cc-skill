@@ -175,6 +175,25 @@ claude plugin list 2>&1 | grep -q telegram || { echo "FATAL: Plugin install fail
 echo "OK: telegram plugin installed"
 ENDPLUGIN
 
+# --- Step 5b: Patch plugin — disable channel permission relay ---
+# Without this, every tool call from a Telegram session pops an Allow/Deny card
+# in Telegram, even with --dangerously-skip-permissions + permissions.allow.
+# The plugin declares an opt-in capability that Claude Code honors independently
+# of terminal bypass flags. Comment it out and the bypass works end-to-end.
+step "5b" "Patch Telegram plugin (disable channel permission relay)"
+$SSH_CMD bash -s << 'EOF'
+set -e
+F=$HOME/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts
+if [ ! -f "$F" ]; then
+  echo "FATAL: telegram plugin server.ts not found at $F"; exit 1
+fi
+[ ! -f "$F.bak" ] && cp "$F" "$F.bak"
+sed -i "s|'claude/channel/permission': {},|// 'claude/channel/permission': {}, // DISABLED: relays tool prompts to TG despite --dangerously-skip-permissions|" "$F"
+grep -q "^ *// 'claude/channel/permission'" "$F" \
+  && echo "OK: channel permission relay disabled" \
+  || { echo "WARNING: patch did not apply — plugin upstream may have changed. Inspect $F manually."; exit 1; }
+EOF
+
 # --- Step 6: Configure bot token ---
 step 6 "Configure bot token"
 $SSH_CMD bash -s << ENDBOT

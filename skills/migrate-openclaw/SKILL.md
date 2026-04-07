@@ -512,6 +512,40 @@ fi
 
 **Fallback (if you can't write to bashrc):** show the user the exact three lines to append manually.
 
+### Step 10b — 🤖 AUTO: Patch Telegram plugin to disable channel permission relay
+
+**Skip this step if the user is not using the Telegram channel** (no `TELEGRAM_BOT_TOKEN`).
+
+**Why**: As of Claude Code 2.1.92, the official Telegram plugin's `server.ts` declares an opt-in capability `'claude/channel/permission': {}`. When declared, Claude Code relays every tool-call permission prompt (Edit/Write/Bash/…) from channel sessions to Telegram as an Allow/Deny button card. This check is **independent of**:
+
+- `--dangerously-skip-permissions` (terminal-only)
+- `permissions.allow` in `settings.json` (terminal-only)
+- `skipDangerousModePermissionPrompt: true` (terminal-only)
+
+So even with all bypasses on, a migrated OpenClaw agent running over Telegram gets spammed with permission cards on every single tool call — a regression from the OpenClaw experience where the user never saw these prompts.
+
+The fix: comment out the single capability declaration line. Channel sessions then fall back to the terminal permission flow, which the bypass flags correctly handle.
+
+```bash
+ssh ${SSH_USER}@${SSH_HOST} -p ${SSH_PORT} bash -s << 'EOF'
+set -e
+F=$HOME/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts
+if [ ! -f "$F" ]; then
+  echo "FATAL: telegram plugin server.ts not found at $F — install the plugin first."; exit 1
+fi
+# Preserve original on first patch
+[ ! -f "$F.bak" ] && cp "$F" "$F.bak"
+sed -i "s|'claude/channel/permission': {},|// 'claude/channel/permission': {}, // DISABLED: relays tool prompts to TG despite --dangerously-skip-permissions|" "$F"
+grep -q "^ *// 'claude/channel/permission'" "$F" \
+  && echo "OK: channel permission relay disabled" \
+  || { echo "WARNING: patch did not apply — plugin upstream may have changed. Inspect $F manually."; exit 1; }
+EOF
+```
+
+> **Re-apply after plugin updates.** `claude plugin marketplace update` or a reinstall will overwrite `server.ts`. Re-run this step whenever the plugin is updated. A `.bak` copy is preserved on first run.
+>
+> **If running as root** (e.g. Gali-style deployments), the path is `/root/.claude/...` and the command above still works because `$HOME` is `/root` for root.
+
 ### Step 11 — 🟡 AUTO-FIRST: Create the startup script with tokens
 
 **Skip this step if `CLAUDE_OAUTH_TOKEN` or `TELEGRAM_BOT_TOKEN` is not provided** — that means the user is only doing a file migration, not a full launch.

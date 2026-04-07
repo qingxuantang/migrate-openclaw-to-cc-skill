@@ -111,6 +111,7 @@ Hard-won discoveries from real deployments:
 | **Claude replies in terminal but user gets nothing** | tmux pane shows the reply, Telegram does not | Claude forgot to call `plugin:telegram:telegram - reply` MCP tool. Add the Telegram Channel reply-tool rule to `CLAUDE.md` and restart the session |
 | Migrate-openclaw v1: files staged but not deployed | User sees staging dir but Claude Code sees nothing | Skill now has an explicit Step 9 that copies into `~/.claude/` |
 | NVM not on PATH in non-interactive shells | `claude: command not found` in startup script | Source NVM in `~/.bashrc` and in `start-claude.sh` |
+| **Telegram spams Allow/Deny permission cards on every tool call** | Edit/Write/Bash from Telegram triggers a `🔐 Permission: <tool>` card even with `--dangerously-skip-permissions` and a full `permissions.allow` list | Plugin `server.ts` declares `'claude/channel/permission': {}` as an opt-in capability. Claude Code relays channel-session permission prompts to Telegram **independently** of terminal bypass flags. Comment out that single line and restart. Skill auto-patches this as Step 10b. |
 
 ### The Telegram Channel Reply-Tool Rule
 
@@ -263,6 +264,7 @@ cp -r skills/deploy-telegram .claude/skills/
 | **Claude 在终端里写了回复，但用户没收到** | tmux 里能看到回复文本，Telegram 没收到 | Claude 忘了调 `plugin:telegram:telegram - reply` MCP 工具。把 Telegram Channel 回复工具规则写进 `CLAUDE.md` 并重启 session |
 | v1 的 migrate-openclaw：文件只 staging 没部署 | 用户能看到 staging 目录，但 Claude Code 读不到任何东西 | 新版 Skill 增加了 Step 9，显式把文件复制到 `~/.claude/` |
 | 非交互式 shell 里 NVM 不在 PATH | 启动脚本里 `claude: command not found` | 在 `~/.bashrc` 和 `start-claude.sh` 里 source NVM |
+| **Telegram 每次调用工具都弹 Allow/Deny 权限卡片** | 即便 `--dangerously-skip-permissions` + `permissions.allow` 全开，Telegram 端一触发 Edit/Write/Bash 还是弹 `🔐 Permission: <tool>` | 插件 `server.ts` 里声明了 opt-in 能力 `'claude/channel/permission': {}`，Claude Code 会**独立于**终端 bypass 标志，把 channel 会话的权限请求转发到 Telegram。把那一行注释掉并重启即可。Skill 的 Step 10b 会自动打这个补丁。 |
 
 ### Telegram Channel 回复工具规则
 
