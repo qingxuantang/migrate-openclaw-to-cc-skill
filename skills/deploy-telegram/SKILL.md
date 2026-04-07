@@ -348,16 +348,21 @@ EOF
 If the user has (or creates) a `~/CLAUDE.md` on the server, append the rule below. Without it, Claude often generates a reply in the terminal but **forgets to call the `plugin:telegram:telegram - reply` MCP tool**, so the Telegram user sees nothing — a silent failure mode observed in real deployments.
 
 ```markdown
-## Telegram Channel Rule (highest priority)
+## Channel Routing Rule (highest priority)
+
+**General principle**: Reply on the *same platform* the message came from.
+Telegram in → Telegram reply tool out. Terminal in → stdout out. Never cross.
 
 When the incoming message is tagged `← telegram · <user_id>:`, you **must**
-reply by calling the `plugin:telegram:telegram - reply` MCP tool. Terminal
-output alone is invisible to the Telegram user.
+reply by calling the `plugin:telegram:telegram - reply` MCP tool targeted at
+the same `chat_id`. Terminal output alone is invisible to the Telegram user.
 
-1. Every user-visible reply must go through the reply tool.
-2. Do not assume the user can see terminal output.
+1. Every user-visible Telegram reply must go through the reply tool.
+2. Do not assume the Telegram user can see terminal output.
 3. If a tool call fails, retry; do not silently drop the reply.
-4. This rule overrides any default "just print to stdout" behavior.
+4. Do not cross-route: never answer a Telegram message by printing only to
+   the terminal, and never push a terminal-only task into Telegram.
+5. This rule overrides any default "just print to stdout" behavior.
 ```
 
 After editing `~/CLAUDE.md`, restart the tmux session so Claude reloads it:

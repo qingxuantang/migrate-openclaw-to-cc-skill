@@ -210,15 +210,21 @@ Write the merged result to `${TARGET_DIR}/CLAUDE.md`.
 ```markdown
 ---
 
-## Telegram Channel 强制规则（最高优先级 / Highest Priority）
+## Channel Routing 强制规则（最高优先级 / Highest Priority）
 
-When a message arrives via the Telegram channel (you see `← telegram · <user_id>:` in your input), you **MUST** reply by calling the `plugin:telegram:telegram - reply` MCP tool. Terminal text output is **NOT** delivered to the user — only explicit tool calls are.
+**General principle**: Always reply on the **same platform** the message came from. If a user messages you from Telegram, reply via the Telegram reply tool; if from Slack, use the Slack reply tool; if from the local terminal, stdout is fine. Never cross platforms and never assume terminal output is visible to a remote user.
+
+### Telegram channel
+
+When a message arrives via the Telegram channel (you see `← telegram · <user_id>:` in your input), you **MUST** reply by calling the `plugin:telegram:telegram - reply` MCP tool. Terminal text output is **NOT** delivered to the Telegram user — only explicit tool calls are.
 
 Rules:
-1. Every Telegram user message must be followed by at least one `plugin:telegram:telegram - reply` tool call.
-2. Do not assume follow-up replies in the same session send automatically. Each new message needs its own explicit reply call.
-3. Markdown written to the terminal is invisible to the user unless passed through the reply tool.
-4. The task is not complete until the reply tool has been called successfully.
+1. Every Telegram user message must be followed by at least one `plugin:telegram:telegram - reply` tool call targeted at the same `chat_id` that sent it.
+2. Do not assume follow-up replies in the same session send automatically. Each new user message needs its own explicit reply call.
+3. Markdown/text written to the terminal is invisible to the user unless passed through the reply tool.
+4. If the reply tool call fails, retry — do not silently drop the reply.
+5. The task is not complete until the reply tool has been called successfully.
+6. Do not cross-route: never answer a Telegram message by printing to the terminal only, and never answer a terminal prompt by pushing it to Telegram.
 ```
 
 After writing, print:
