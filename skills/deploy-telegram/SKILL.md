@@ -171,7 +171,8 @@ cat > ~/.claude/settings.json << 'SETTINGS'
       "Glob(*)", "Grep(*)", "WebSearch(*)", "WebFetch(*)",
       "NotebookEdit(*)", "mcp__*"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "bypassPermissions"
   },
   "channelsEnabled": true,
   "skipDangerousModePermissionPrompt": true
@@ -182,6 +183,8 @@ EOF
 ```
 
 > **CRITICAL**: `channelsEnabled: true` is mandatory. Without it, inbound Telegram messages are silently dropped with no error — the debug log shows `Channel notifications skipped`.
+
+> **CRITICAL**: `permissions.defaultMode: "bypassPermissions"` is what actually silences permission prompts. `permissions.allow` and `skipDangerousModePermissionPrompt` only control the *judgment* after a check is triggered — they don't suppress the check itself. Six modes exist (`default`/`acceptEdits`/`plan`/`auto`/`dontAsk`/`bypassPermissions`); only the last is equivalent to launching with `--dangerously-skip-permissions` every time. The startup script in Step 6 already passes that flag, but setting `defaultMode` here also covers any manual `claude` invocations on the same server.
 
 ### Step 5: Install Telegram plugin
 

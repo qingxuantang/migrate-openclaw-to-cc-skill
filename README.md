@@ -112,6 +112,8 @@ Hard-won discoveries from real deployments:
 | Migrate-openclaw v1: files staged but not deployed | User sees staging dir but Claude Code sees nothing | Skill now has an explicit Step 9 that copies into `~/.claude/` |
 | NVM not on PATH in non-interactive shells | `claude: command not found` in startup script | Source NVM in `~/.bashrc` and in `start-claude.sh` |
 | **Telegram spams Allow/Deny permission cards on every tool call** | Edit/Write/Bash from Telegram triggers a `🔐 Permission: <tool>` card even with `--dangerously-skip-permissions` and a full `permissions.allow` list | Plugin `server.ts` declares `'claude/channel/permission': {}` as an opt-in capability. Claude Code relays channel-session permission prompts to Telegram **independently** of terminal bypass flags. Comment out that single line and restart. Skill auto-patches this as Step 10b. |
+| **Claude silently stops responding mid-session** | tmux pane shows an "allow Claude to edit its own settings" dialog; Telegram gets no reply | Hard-coded safety prompt fires whenever Claude edits any file under `~/.claude/` (e.g. tweaking a skill's own source). Not covered by `--dangerously-skip-permissions`, no settings switch. Recover by sending `Down` then `Enter` via `tmux send-keys` to pick option 2 — unblocks the session until next restart. |
+| **Local Claude Code keeps prompting for permission even with `permissions.allow` full-wildcard** | Edit/Write still pops a permission card despite `permissions.allow: ["Bash(*)","Edit(*)",…]` and `skipDangerousModePermissionPrompt: true` | Those two keys only control the *judgment* after a check is triggered, not the check itself. Add `permissions.defaultMode: "bypassPermissions"` to `~/.claude/settings.json` — equivalent to launching with `--dangerously-skip-permissions` every time. Six modes exist (`default`/`acceptEdits`/`plan`/`auto`/`dontAsk`/`bypassPermissions`); only the last truly silences prompts. Self-edit guard on `~/.claude/` files still cannot be bypassed. |
 
 ### The Telegram Channel Reply-Tool Rule
 
@@ -265,6 +267,8 @@ cp -r skills/deploy-telegram .claude/skills/
 | v1 的 migrate-openclaw：文件只 staging 没部署 | 用户能看到 staging 目录，但 Claude Code 读不到任何东西 | 新版 Skill 增加了 Step 9，显式把文件复制到 `~/.claude/` |
 | 非交互式 shell 里 NVM 不在 PATH | 启动脚本里 `claude: command not found` | 在 `~/.bashrc` 和 `start-claude.sh` 里 source NVM |
 | **Telegram 每次调用工具都弹 Allow/Deny 权限卡片** | 即便 `--dangerously-skip-permissions` + `permissions.allow` 全开，Telegram 端一触发 Edit/Write/Bash 还是弹 `🔐 Permission: <tool>` | 插件 `server.ts` 里声明了 opt-in 能力 `'claude/channel/permission': {}`，Claude Code 会**独立于**终端 bypass 标志，把 channel 会话的权限请求转发到 Telegram。把那一行注释掉并重启即可。Skill 的 Step 10b 会自动打这个补丁。 |
+| **Claude 跑着跑着突然不回复** | tmux pane 卡在 "allow Claude to edit its own settings" 对话框，Telegram 收不到任何回复 | 只要 Claude 要编辑 `~/.claude/` 目录下的文件（比如改 skill 自己的源码），就会触发这个硬编码的安全确认。`--dangerously-skip-permissions` 绕不过去，settings.json 也没开关。恢复方式：通过 `tmux send-keys` 发送 `Down` + `Enter` 选第 2 项，可以让本 session 剩余时间内都不再弹（重启后会再来）。 |
+| **本地 Claude Code 即便 `permissions.allow` 全通配也仍弹权限卡片** | `permissions.allow: ["Bash(*)","Edit(*)",…]` + `skipDangerousModePermissionPrompt: true` 都加了，Edit/Write 还是弹卡 | 这两个 key 只控制"检查触发后的判定"，并不抑制检查本身。在 `~/.claude/settings.json` 里加 `permissions.defaultMode: "bypassPermissions"` 才是真正等价于每次都用 `--dangerously-skip-permissions` 启动。Schema 里六种 mode（`default`/`acceptEdits`/`plan`/`auto`/`dontAsk`/`bypassPermissions`），只有最后一个真正静默所有提示。但 `~/.claude/` 自编辑保护仍无法绕过。 |
 
 ### Telegram Channel 回复工具规则
 
