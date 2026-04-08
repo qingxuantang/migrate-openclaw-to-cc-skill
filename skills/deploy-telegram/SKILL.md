@@ -436,20 +436,27 @@ echo "OK: systemd service active — Claude Code will auto-start on reboot"
 EOF
 ```
 
-### Step 9b: Install Channel Routing Rule into ~/CLAUDE.md (MANDATORY)
+### Step 9b: Install Channel Routing Rule into BOTH CLAUDE.md files (MANDATORY)
 
 **Why**: Without this rule, Claude often generates a reply in the terminal but **forgets to call the `plugin:telegram:telegram - reply` MCP tool**, so the Telegram user sees nothing — a silent failure mode observed in real deployments (Gali, MM, APPSHIP all hit it). This step is **not optional**: every Telegram-channel deployment must end with this rule installed and the session restarted.
 
-The block is fenced with HTML markers so the step is idempotent — re-running it on a server that already has the rule is a no-op, and it never duplicates or clobbers the user's other CLAUDE.md content.
+**Why both files**: Claude Code loads two layers of CLAUDE.md — `~/.claude/CLAUDE.md` (user-level, always loaded) and `~/CLAUDE.md` or `<cwd>/CLAUDE.md` (project-level, loaded based on launch directory). On long-running sessions, the model can re-Read the user-level file mid-session (e.g. when the agent introspects its own configuration), which then becomes the dominant authority in context. If the rule is **only** in the project-level file, it gets effectively shadowed and the silent-drop bug returns. **Observed at Gali on 2026-04-08**: a session that worked for ~1 day suddenly stopped routing Telegram replies through the reply tool, because the rule lived only in `/root/CLAUDE.md` while the agent was now anchored on `/root/.claude/CLAUDE.md`. The fix is to put the same rule block in **both** files.
+
+Each block is fenced with HTML markers so the step is idempotent — re-running it on a server that already has the rule is a no-op, and it never duplicates or clobbers the user's other CLAUDE.md content.
 
 ```bash
 $SSH_CMD bash -s << 'EOF'
 set -e
-touch ~/CLAUDE.md
-if grep -q '<!-- BEGIN: channel-routing-rule -->' ~/CLAUDE.md; then
-  echo "OK: channel routing rule already present in ~/CLAUDE.md"
-else
-  cat >> ~/CLAUDE.md << 'RULEEOF'
+
+install_rule() {
+  local F=$1
+  mkdir -p "$(dirname "$F")"
+  touch "$F"
+  if grep -q '<!-- BEGIN: channel-routing-rule -->' "$F"; then
+    echo "OK: channel routing rule already present in $F"
+    return
+  fi
+  cat >> "$F" << 'RULEEOF'
 
 <!-- BEGIN: channel-routing-rule -->
 ## Channel Routing Rule (highest priority)
@@ -467,10 +474,16 @@ the same `chat_id`. Terminal output alone is invisible to the Telegram user.
 4. Do not cross-route: never answer a Telegram message by printing only to
    the terminal, and never push a terminal-only task into Telegram.
 5. This rule overrides any default "just print to stdout" behavior.
+6. Even if you already printed text to the terminal, you must still issue a
+   reply tool call afterwards — terminal output does not count as a reply.
 <!-- END: channel-routing-rule -->
 RULEEOF
-  echo "OK: channel routing rule appended to ~/CLAUDE.md"
-fi
+  echo "OK: channel routing rule appended to $F"
+}
+
+# Install in both layers — see Step 9b "Why both files" for rationale.
+install_rule ~/CLAUDE.md
+install_rule ~/.claude/CLAUDE.md
 
 # Restart tmux session so Claude reloads CLAUDE.md
 tmux kill-session -t claude 2>/dev/null || true
