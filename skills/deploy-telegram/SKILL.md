@@ -61,7 +61,7 @@ Define the SSH command once:
 SSH_CMD="ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${SSH_USER}@${SSH_HOST}"
 ```
 
-Execute Steps 1–9 sequentially. After each step, check exit code — abort on failure.
+Execute Steps 1–9b sequentially. After each step, check exit code — abort on failure.
 
 ---
 
@@ -436,13 +436,22 @@ echo "OK: systemd service active — Claude Code will auto-start on reboot"
 EOF
 ```
 
----
+### Step 9b: Install Channel Routing Rule into ~/CLAUDE.md (MANDATORY)
 
-## Recommended: Add Telegram Reply-Tool Rule to CLAUDE.md
+**Why**: Without this rule, Claude often generates a reply in the terminal but **forgets to call the `plugin:telegram:telegram - reply` MCP tool**, so the Telegram user sees nothing — a silent failure mode observed in real deployments (Gali, MM, APPSHIP all hit it). This step is **not optional**: every Telegram-channel deployment must end with this rule installed and the session restarted.
 
-If the user has (or creates) a `~/CLAUDE.md` on the server, append the rule below. Without it, Claude often generates a reply in the terminal but **forgets to call the `plugin:telegram:telegram - reply` MCP tool**, so the Telegram user sees nothing — a silent failure mode observed in real deployments.
+The block is fenced with HTML markers so the step is idempotent — re-running it on a server that already has the rule is a no-op, and it never duplicates or clobbers the user's other CLAUDE.md content.
 
-```markdown
+```bash
+$SSH_CMD bash -s << 'EOF'
+set -e
+touch ~/CLAUDE.md
+if grep -q '<!-- BEGIN: channel-routing-rule -->' ~/CLAUDE.md; then
+  echo "OK: channel routing rule already present in ~/CLAUDE.md"
+else
+  cat >> ~/CLAUDE.md << 'RULEEOF'
+
+<!-- BEGIN: channel-routing-rule -->
 ## Channel Routing Rule (highest priority)
 
 **General principle**: Reply on the *same platform* the message came from.
@@ -458,10 +467,44 @@ the same `chat_id`. Terminal output alone is invisible to the Telegram user.
 4. Do not cross-route: never answer a Telegram message by printing only to
    the terminal, and never push a terminal-only task into Telegram.
 5. This rule overrides any default "just print to stdout" behavior.
+<!-- END: channel-routing-rule -->
+RULEEOF
+  echo "OK: channel routing rule appended to ~/CLAUDE.md"
+fi
+
+# Restart tmux session so Claude reloads CLAUDE.md
+tmux kill-session -t claude 2>/dev/null || true
+sleep 2
+tmux new-session -d -s claude ~/start-claude.sh
+sleep 12
+
+# Re-handle first-launch dialogs (trust folder + bypass permissions)
+tmux send-keys -t claude Enter
+sleep 4
+OUTPUT=$(tmux capture-pane -t claude -p 2>&1)
+if echo "$OUTPUT" | grep -q "Yes, I accept"; then
+  tmux send-keys -t claude Down
+  sleep 0.5
+  tmux send-keys -t claude Enter
+  sleep 12
+fi
+
+# Confirm listening
+for i in 1 2 3 4; do
+  OUTPUT=$(tmux capture-pane -t claude -p 2>&1)
+  if echo "$OUTPUT" | grep -q "Listening for channel messages"; then
+    echo "SUCCESS: Claude reloaded with channel routing rule active"
+    exit 0
+  fi
+  sleep 5
+done
+echo "WARNING: post-restart listening state not confirmed. Pane:"
+tmux capture-pane -t claude -p 2>&1 | tail -15
+exit 1
+EOF
 ```
 
-After editing `~/CLAUDE.md`, restart the tmux session so Claude reloads it:
-`tmux kill-session -t claude && tmux new-session -d -s claude ~/start-claude.sh`
+> **Why mandatory, not recommended**: This was originally documented as a recommendation. Real deployments showed that *every* server without this rule eventually hits the silent-drop bug — the model writes a beautiful reply to the terminal that the Telegram user never sees, and the operator only finds out by SSH-ing in and reading the tmux pane. Promoting it to a deterministic step removes the failure mode entirely.
 
 ---
 
