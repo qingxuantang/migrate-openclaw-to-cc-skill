@@ -306,6 +306,23 @@ echo "    Service will auto-start on server reboot"
 ENDSETUP
 ```
 
+### Operating note: slash commands over Telegram do NOT work
+
+**Slash commands sent from Telegram are not recognized by Claude Code's CLI parser.** Claude Code only intercepts slash commands (e.g. `/model opus`, `/clear`, `/compact`, `/cost`, `/help`) when they are typed **directly into the local terminal**. Messages arriving via the Telegram channel plugin are injected into the prompt stream **after** the CLI's input parser, so the model sees the literal string `/model opus` as a normal user message and has no way to act on it.
+
+**Implications**:
+- You **cannot** switch the model from Telegram. You must SSH in, edit `~/start-claude.sh` to add a `--model <name>` flag (or set `env.ANTHROPIC_MODEL` in `~/.claude/settings.json`), then kill+relaunch the tmux session.
+- You **cannot** clear context (`/clear`), compact (`/compact`), check cost (`/cost`), or invoke any other CLI-level command from Telegram. Each of these requires a terminal session — for "clear context" remotely, restart the tmux session (a fresh session has empty context).
+- This is a hard architectural limit of the channel plugin design, not a bug to be patched.
+
+If you want to control the model on a per-deployment basis, set it at startup. Example startup script line:
+
+```bash
+claude --dangerously-skip-permissions \
+  --model claude-opus-4-5-20250929 \
+  --channels plugin:telegram@claude-plugins-official
+```
+
 ### Step 7b: Telegram inbox mover (avoid sensitive-file guard)
 
 **Why**: When a Telegram user uploads a file (image, PDF, xlsx, txt, …), the plugin drops it into `~/.claude/channels/telegram/inbox/`. As soon as Claude tries to `cp`/`mv`/`Read` that file, Claude Code's **hard-coded sensitive-file guard** fires (because the path is under `~/.claude/`) and pops a blocking permission dialog. This guard is **not** bypassed by `--dangerously-skip-permissions`, `permissions.allow`, `skipDangerousModePermissionPrompt`, or `permissions.defaultMode: bypassPermissions` — it's an independent hard-coded check. The result: the Claude session in tmux silently freezes on a dialog while the Telegram user gets nothing back.

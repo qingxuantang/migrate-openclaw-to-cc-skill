@@ -234,6 +234,17 @@ When a Telegram user uploads a file (image, PDF, xlsx, txt, audio, …), it is *
 2. To list the most recent uploads: `ls -lt ~/telegram-inbox/ | head`. Filenames are the original Telegram file_id with the correct extension (`.xlsx`/`.pdf`/`.jpg`/…).
 3. Move/rename/copy the file out of `~/telegram-inbox/` to your working directory before processing — `~/telegram-inbox/` is a staging area, not a workspace.
 4. Never `Read`, `cp`, `mv`, `cat`, or any other operation against a path under `~/.claude/channels/`. If you do, the session will hang and the user will think you crashed.
+
+### Slash commands from Telegram are not real slash commands
+
+If a Telegram user sends you a message starting with `/` (e.g. `/model opus`, `/clear`, `/compact`, `/cost`, `/help`, `/buddy`), it is **not** a Claude Code CLI slash command. Claude Code's CLI parser only intercepts slash commands typed directly into the local terminal — channel-injected messages bypass it entirely and arrive at you as plain user prompts.
+
+**You must NOT**:
+- Pretend you switched models when asked `/model <name>` — you cannot. Reply via the Telegram reply tool explaining the user must SSH to the server and edit `~/start-claude.sh` (add `--model <name>`) then restart the tmux session.
+- Pretend you cleared context when asked `/clear` — you cannot clear your own context. Tell the user the only way is to restart the tmux session on the server (which gives a fresh empty session).
+- Silently process the slash command as if it were a normal prompt, leaving the user confused.
+
+**You should**: explicitly call out that the requested operation is a CLI-only command and tell the user the SSH-side procedure to achieve the equivalent result.
 ```
 
 After writing, print:
