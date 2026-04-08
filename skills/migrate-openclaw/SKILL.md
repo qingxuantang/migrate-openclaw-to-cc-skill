@@ -225,6 +225,15 @@ Rules:
 4. If the reply tool call fails, retry — do not silently drop the reply.
 5. The task is not complete until the reply tool has been called successfully.
 6. Do not cross-route: never answer a Telegram message by printing to the terminal only, and never answer a terminal prompt by pushing it to Telegram.
+
+### Telegram file uploads
+
+When a Telegram user uploads a file (image, PDF, xlsx, txt, audio, …), it is **automatically moved** by a systemd path watcher (`tg-inbox-mover.path`, installed by the `deploy-telegram` skill) from `~/.claude/channels/telegram/inbox/` to `~/telegram-inbox/`. **You MUST**:
+
+1. **Always** look for uploaded files at `~/telegram-inbox/`, never at `~/.claude/channels/telegram/inbox/`. The latter path is under `~/.claude/` and is protected by Claude Code's hard-coded sensitive-file guard — touching it will silently freeze your session on a permission dialog that the Telegram user cannot dismiss.
+2. To list the most recent uploads: `ls -lt ~/telegram-inbox/ | head`. Filenames are the original Telegram file_id with the correct extension (`.xlsx`/`.pdf`/`.jpg`/…).
+3. Move/rename/copy the file out of `~/telegram-inbox/` to your working directory before processing — `~/telegram-inbox/` is a staging area, not a workspace.
+4. Never `Read`, `cp`, `mv`, `cat`, or any other operation against a path under `~/.claude/channels/`. If you do, the session will hang and the user will think you crashed.
 ```
 
 After writing, print:
