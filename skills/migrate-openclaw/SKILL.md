@@ -109,6 +109,48 @@ Claude Code stores project-level memory at `~/.claude/projects/<cwd-slug>/memory
 
 ---
 
+## Execution mode: remote SSH vs local self-execution
+
+This skill is written with all commands wrapped in `$SSH_CMD bash -s << EOF ... EOF`. That assumes a **controller** agent (e.g. a Claude Code on your laptop) reaches out to a remote target server via SSH. But the skill works equally well in **self-execution mode**, where the agent runs on the same machine it's migrating — typically the OpenClaw agent migrating *itself*.
+
+Pick the mode that fits, and define `SSH_CMD` accordingly **before** Step 1:
+
+| Mode | When | `SSH_CMD` definition |
+|---|---|---|
+| **Remote** | Controller agent (e.g. local Claude Code) targets a different machine | `SSH_CMD="ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST}"` |
+| **Local self-execution** | OpenClaw agent on the target machine runs the skill on its own host | `SSH_CMD=""` (empty — every `$SSH_CMD bash -s` becomes a plain local `bash -s`) |
+
+The `$SSH_CMD bash -s << 'EOF' ... EOF` pattern degrades cleanly: with `SSH_CMD=""`, the line becomes `bash -s << 'EOF' ... EOF` which is just a local heredoc. **Do not** strip the `$SSH_CMD` calls — they are the universal entry point.
+
+### 🪞 Self-migration notes (when OpenClaw migrates itself)
+
+If the executing agent **is** OpenClaw running on the target host, read these before starting:
+
+1. **Don't kill yourself.** The "🚫 Do Not Do" rule "never stop OpenClaw" applies *especially* to the self-execution case. You are OpenClaw. Do not `systemctl stop openclaw`, `pkill openclaw`, or otherwise touch your own process. Migration is a *parallel* deployment, not a takeover.
+
+2. **Read your own SOUL.md, never write to it.** Step 3 merges `SOUL.md` / `AGENTS.md` / `IDENTITY.md` / etc. into a new `CLAUDE.md`. Always write the merged result to `${TARGET_DIR}/CLAUDE.md` (staging) and then `${HOME}/CLAUDE.md` (the deploy target — separate from your workspace). **Never** edit files under `~/.openclaw/workspace/` during migration. Open-heart surgery rule: don't modify the body you're currently inhabiting.
+
+3. **Run as the same user that will own Claude Code.** Whatever Linux user runs `claude` later must own `~/.claude/`, `~/CLAUDE.md`, `~/start-claude.sh`. The simplest setup is "OpenClaw and Claude Code share the same user" — then all home-relative paths just work. If OpenClaw runs as a dedicated service user (e.g. `openclaw`) but you want Claude Code under `ubuntu`, you need to either switch users (re-invoke yourself via `sudo -u ubuntu` for the deploy steps) or accept that the migration will need a manual hand-off.
+
+4. **OAuth token still has to come from outside.** `claude setup-token` requires a browser. Headless servers can't run it. The OpenClaw agent doing self-migration must ask the human to run `claude setup-token` on their laptop and paste the resulting `sk-ant-oat01-...` back in. There is no way around this.
+
+5. **New Telegram bot, every time.** It is tempting in self-migration mode to think "I'm already authenticated with Telegram via the OpenClaw plugin, let me reuse that bot token." **Do not.** Two long-pollers on the same token = 409 Conflict for both processes; both stop receiving messages. Tell the human to create a fresh bot via @BotFather and give you the new token.
+
+6. **You will be reading files you wrote yourself.** Be aware of the recursive weirdness: `cat ~/.openclaw/workspace/SOUL.md` shows you the rules *you yourself* are currently following. That's expected — the migration's job is to translate those rules into the format the *next* incarnation (Claude Code) will read. Don't get philosophical about it; just do the synthesis honestly.
+
+7. **Cron jobs and other channels keep running.** Your existing OpenClaw crons, WhatsApp binding, Slack relays, etc. all keep running on the OpenClaw side throughout and after the migration. The skill explicitly does not touch them. Don't decide "since I'm migrating, I should also clean up my cron." That's a separate task and risks data loss if Claude Code can't yet handle whatever the cron does.
+
+8. **Dual-track is the safe end state.** After migration, the typical pattern is: OpenClaw keeps its existing channels (especially WhatsApp, which has no Claude Code MCP equivalent yet); Claude Code takes over Telegram. Both run concurrently for days or weeks. Do not rush to decommission OpenClaw — let the human decide when to pull the plug after observing the new deployment in production.
+
+### Why we still write the SSH wrapper even though it's optional
+
+Two reasons:
+
+- **Single source of truth.** One `$SSH_CMD bash -s << EOF` line works for both modes (with `SSH_CMD=""` collapsing to local). Forking the skill into "remote version" and "local version" doubles maintenance burden and lets the two versions drift.
+- **Multi-server controllers benefit too.** Many real users have a fleet — a laptop or jump host that operates several remote servers. Writing the skill remote-first means a single Claude Code controller can drive the same skill across N machines without per-machine rewrites.
+
+---
+
 ## 🚫 Do Not Do (read this first)
 
 1. **Do NOT stop OpenClaw.** The user wants dual-track. Never `systemctl stop openclaw`, `pkill openclaw`, or delete `~/.openclaw`.

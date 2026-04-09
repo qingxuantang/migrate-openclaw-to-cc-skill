@@ -55,11 +55,32 @@ EOF
 
 ## Execution
 
-Define the SSH command once:
+### Pick an execution mode
 
-```
-SSH_CMD="ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${SSH_USER}@${SSH_HOST}"
-```
+This skill is written remote-first: every step is wrapped in `$SSH_CMD bash -s << EOF`. That works for the most common case (a controller agent on your laptop reaches out to a target server via SSH), but it also degrades cleanly to **local self-execution** — where the agent runs on the same machine it's installing Claude Code on, e.g. an OpenClaw agent setting up Claude Code on its own host as a parallel deployment.
+
+Define `SSH_CMD` **once**, before Step 1, depending on the mode:
+
+| Mode | When | `SSH_CMD` definition |
+|---|---|---|
+| **Remote** | Controller agent (e.g. local Claude Code) targets a different machine | `SSH_CMD="ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no -o ConnectTimeout=15 ${SSH_USER}@${SSH_HOST}"` |
+| **Local self-execution** | The agent runs on the target host itself (e.g. OpenClaw deploying Claude Code beside itself) | `SSH_CMD=""` — every `$SSH_CMD bash -s` collapses to a plain local `bash -s` |
+
+> **Don't fork the skill** by stripping the `$SSH_CMD` calls. The wrapper is the universal entry point — both modes use the same command lines verbatim. With `SSH_CMD=""`, `$SSH_CMD bash -s << 'EOF' ... EOF` is just `bash -s << 'EOF' ... EOF`, which is exactly what you want for local execution.
+
+### Self-execution caveats (OpenClaw setting up Claude Code on its own host)
+
+If the executing agent is OpenClaw on the target machine, also read these:
+
+1. **Don't kill yourself.** Do not stop the OpenClaw process during deployment. This is a *parallel* install, not a takeover. OpenClaw keeps its existing channels (especially WhatsApp); Claude Code takes Telegram.
+2. **Same Linux user as your future Claude Code.** Whatever user runs `claude` later must own `~/.claude/`, `~/CLAUDE.md`, `~/start-claude.sh`. Easiest setup: OpenClaw and Claude Code share the same user. If they need to differ, switch users explicitly (e.g. `sudo -u ubuntu`) for the deploy steps.
+3. **OAuth token still has to come from a browser.** `claude setup-token` requires interactive login. Headless servers can't run it. Ask the human to run it on their laptop and paste the resulting `sk-ant-oat01-...` token back.
+4. **New Telegram bot — never reuse the one OpenClaw is currently using.** Two long-pollers on the same bot token = 409 Conflict and both processes silently stop receiving messages. Get a fresh bot from @BotFather.
+5. **Cron jobs and other channels keep running.** Don't "clean up" your existing OpenClaw setup as part of this deploy. Migration is the *next* skill (`migrate-openclaw`); this one only adds Claude Code beside what's already running.
+
+For the corresponding migration skill (which has more self-execution caveats — read-your-own-SOUL.md, open-heart-surgery rules, etc.) see [`../migrate-openclaw/SKILL.md`](../migrate-openclaw/SKILL.md).
+
+---
 
 Execute Steps 1–9b sequentially. After each step, check exit code — abort on failure.
 
