@@ -479,6 +479,64 @@ EOF
 
 > **Re-apply after CC major upgrades.** The hook schema is a public API (documented in CC hook docs), but a major version bump could change the expected output format. After upgrading CC, verify with: `mkdir -p ~/.claude/skills/_canary && echo test > ~/.claude/skills/_canary/t.txt` then ask Claude to edit it — if no permission dialog appears and the log says "Allowed by PermissionRequest hook", the hook still works.
 
+### Step 7d: Install Telegram routing enforcement hook (prevent silent drops)
+
+**Why**: After multiple `compact` cycles, Claude frequently "forgets" to call the `plugin:telegram:telegram - reply` MCP tool for Telegram messages — it generates a full response in the terminal that the Telegram user never sees. This happens even when the channel routing rule is written at the **top** of both `~/CLAUDE.md` and `~/.claude/CLAUDE.md`. The root cause is that `compact` summaries don't preserve CLAUDE.md instructions, and the model's attention drifts in long contexts. Observed on all four production servers (Gali, MM, Appship, Miah) — **every server eventually hits this silent-drop bug**.
+
+CLAUDE.md rules are best-effort (model must "remember" them). Hooks are code-level (execute deterministically). This step uses a **`UserPromptSubmit` hook** that fires every time a message enters the session. If the message contains a Telegram channel marker (`← telegram`), the hook injects `additionalContext` directly into the model's input, forcing it to see the routing instruction **in the same turn**, regardless of what was compacted away.
+
+```bash
+$SSH_CMD bash -s << 'EOF'
+set -e
+
+# --- Hook script: inject Telegram routing reminder on every inbound message ---
+cat > ~/telegram-routing-hook.sh << 'HOOKEOF'
+#!/bin/bash
+# UserPromptSubmit hook: detect Telegram channel messages and inject routing reminder
+input=$(cat)
+python3 - "$input" << 'PY'
+import sys, json
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(0)
+user_input = d.get("tool_input", {}).get("prompt", "") or ""
+if "telegram" in user_input.lower() and ("<-" in user_input or chr(8592) in user_input):
+    result = {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "TELEGRAM ROUTING MANDATORY: This message came from Telegram. You MUST call plugin:telegram:telegram reply MCP tool with chat_id to send your response. Terminal output is INVISIBLE to the Telegram user. Do NOT skip the reply tool call."
+        }
+    }
+    print(json.dumps(result))
+PY
+HOOKEOF
+chmod +x ~/telegram-routing-hook.sh
+
+# --- Patch settings.json to register hook ---
+python3 << 'PYEOF'
+import json, os
+p = os.path.expanduser("~/.claude/settings.json")
+d = json.load(open(p))
+hooks = d.setdefault("hooks", {})
+hook_entry = {"matcher":"","hooks":[{"type":"command","command": os.path.expanduser("~/telegram-routing-hook.sh")}]}
+existing = hooks.get("UserPromptSubmit", [])
+if not any("telegram-routing-hook" in str(h) for h in existing):
+    existing.append(hook_entry)
+    hooks["UserPromptSubmit"] = existing
+json.dump(d, open(p, "w"), indent=4)
+PYEOF
+
+echo "OK: Telegram routing hook installed + settings.json patched"
+EOF
+```
+
+> **How it works**: Every time a user message enters the session (including Telegram channel pushes), the hook checks if the raw input contains a `← telegram` marker. If yes, it returns JSON with `additionalContext` that gets injected directly into the model's context for that turn. The model sees "TELEGRAM ROUTING MANDATORY: ..." as part of its input, making it virtually impossible to forget the reply tool call. If the message is from the terminal (no telegram marker), the hook exits silently with no effect.
+
+> **Why not rely on CLAUDE.md alone**: CLAUDE.md is loaded once at session start and after each compact. But compact summaries don't include CLAUDE.md content, and in long sessions with many tool calls, the routing rule gets buried under task context. The hook fires **per-message**, guaranteeing the instruction is fresh in every single turn that needs it.
+
+> **Complementary, not replacement**: Keep the channel routing rule in both CLAUDE.md files (Step 9b). The CLAUDE.md rule handles edge cases the hook might miss (e.g., multi-turn Telegram conversations where only the first message has the marker). The hook handles the common case where compact erases the model's awareness of CLAUDE.md.
+
 ### Step 8: Launch and confirm dialogs
 
 ```bash
@@ -730,4 +788,5 @@ Problem: No response from bot
 | `~/.claude/channels/telegram/access.json` | Paired users + policy | 644 (auto) |
 | `~/start-claude.sh` | Startup with auto-restart loop | 700 |
 | `~/bypass-claude-folder.sh` | PermissionRequest hook (Step 7c) | 700 |
+| `~/telegram-routing-hook.sh` | Telegram reply enforcement hook (Step 7d) | 700 |
 | `~/.config/systemd/user/claude-telegram.service` | Boot persistence | 644 |
