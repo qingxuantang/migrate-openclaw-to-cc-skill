@@ -402,7 +402,7 @@ EOF
 
 This guard cannot be bypassed via settings. However, Claude Code's **PermissionRequest hook** fires when the guard is about to display the prompt. If the hook returns `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, the prompt is skipped entirely. Claude Code logs `Allowed by PermissionRequest hook` as an audit trail.
 
-**Discovery details**: The guard's implementation was reverse-engineered from `cli.js` on 2026-04-09. The constants `NG8="/.claude/**"` and `yG8="~/.claude/**"` define the protected globs, but additional sensitive file checks exist for common dotfiles (`~/.bashrc`, `~/.profile`, etc.). A PreToolUse hook can bypass the guard for Read operations but **not** for Edit/Write (log: "Hook approved tool use for Edit, but ask rule requires prompt"). Only PermissionRequest hooks have sufficient priority to override the ask rule. Verified on four independent production deployments. The `~/.bashrc` guard was subsequently discovered after a Telegram session froze for 30 minutes.
+**Discovery details**: The guard's implementation was reverse-engineered from `cli.js` on 2026-04-09. The constants `NG8="/.claude/**"` and `yG8="~/.claude/**"` define the protected globs, but additional sensitive file checks exist for common dotfiles (`~/.bashrc`, `~/.profile`, etc.). A PreToolUse hook can bypass the guard for Read operations but **not** for Edit/Write (log: "Hook approved tool use for Edit, but ask rule requires prompt"). Only PermissionRequest hooks have sufficient priority to override the ask rule. Verified on four independent production deployments. The `~/.bashrc` guard was subsequently discovered after a Telegram session froze for 30 minutes. **The guard also fires on project-nested `.claude/` directories** (e.g. `workspace/<project>/.claude/skills/knowledge/`) — not just `~/.claude/` — so the hook below uses substring matching, not prefix matching anchored at `$HOME`.
 
 ```bash
 $SSH_CMD bash -s << 'EOF'
@@ -414,86 +414,100 @@ cat > ~/bypass-claude-folder.sh << 'HOOKEOF'
 # PreToolUse + PermissionRequest hook
 # Auto-allow tool calls targeting sensitive paths in headless/Telegram deployments.
 # Bypasses CC's hardcoded alwaysAskRule guards for:
-#   - ~/.claude/** (settings, channels, plugins, skills)
-#   - ~/.*rc, ~/.*profile, ~/.*_profile (shell config)
-#   - ~/.gitconfig, ~/.npmrc, ~/.config/** (tool config)
-#   - ~/.env, ~/.envrc (environment)
+#   - ANY path containing /.claude/ or /.config/ (matched by substring)
+#   - common dotfile basenames: .bashrc / .bash_profile / .profile /
+#     .zshrc / .zprofile / .zshenv / .gitconfig / .npmrc / .env / .envrc /
+#     .claude.json
+# Substring matching, NOT anchored at $HOME. Project-nested directories
+# like /<project>/.claude/skills/knowledge/ are treated as sensitive too.
+# Without this, headless Claude halts on permission dialogs whenever a
+# skill writes into its own .claude/ dir.
 # Covers: Edit/Read/Write (file_path), NotebookEdit (notebook_path), Bash (command string)
 input=$(cat)
 HOOK_HOME="$HOME" python3 - "$input" << 'PY'
-import sys, json, os, re
+import sys, json, os
 try:
     d = json.loads(sys.argv[1])
 except Exception:
     sys.exit(0)
+
 event = d.get("hook_event_name", "")
 ti = d.get("tool_input", {}) or {}
 home = os.environ.get("HOOK_HOME", "")
 
-# Sensitive paths to auto-allow
-SENSITIVE_PREFIXES = [
-    home + "/.claude/",
-    home + "/.config/",
-]
-SENSITIVE_EXACT = [
-    home + "/.claude",
-    home + "/.bashrc",
-    home + "/.bash_profile",
-    home + "/.profile",
-    home + "/.zshrc",
-    home + "/.zprofile",
-    home + "/.zshenv",
-    home + "/.gitconfig",
-    home + "/.npmrc",
-    home + "/.env",
-    home + "/.envrc",
-    home + "/.claude.json",
-]
+# Sensitive directory components — match anywhere in the path
+SENSITIVE_DIR_SUBSTRINGS = ("/.claude/", "/.config/")
+
+# Sensitive file basenames — match the final path segment
+SENSITIVE_BASENAMES = {
+    ".claude", ".bashrc", ".bash_profile", ".profile",
+    ".zshrc", ".zprofile", ".zshenv",
+    ".gitconfig", ".npmrc", ".env", ".envrc",
+    ".claude.json",
+}
+
+# For Bash command-string scanning: tokens that look like a path component
+# of one of the sensitive basenames (anchored with "/" so we match path
+# usage, not random substrings inside other words).
+SENSITIVE_CMD_TOKENS = (
+    "/.claude/", "/.config/",
+    "/.bashrc", "/.bash_profile", "/.profile",
+    "/.zshrc", "/.zprofile", "/.zshenv",
+    "/.gitconfig", "/.npmrc", "/.env", "/.envrc",
+    "/.claude.json",
+    # Tilde-relative variants (commonly typed by humans/skills)
+    "~/.claude/", "~/.config/", "~/.bashrc", "~/.bash_profile",
+    "~/.profile", "~/.zshrc", "~/.zprofile", "~/.zshenv",
+    "~/.gitconfig", "~/.npmrc", "~/.env", "~/.envrc",
+    "~/.claude.json",
+)
 
 def expand_path(p):
     if p.startswith("~/"):
         return home + p[1:]
-    elif p == "~":
+    if p == "~":
         return home
     return p
 
-def is_sensitive(p):
-    p = expand_path(p)
-    if p in SENSITIVE_EXACT:
+def path_is_sensitive(p):
+    if not p:
+        return False
+    expanded = expand_path(p)
+    if any(s in expanded for s in SENSITIVE_DIR_SUBSTRINGS):
         return True
-    return any(p.startswith(prefix) for prefix in SENSITIVE_PREFIXES)
+    base = os.path.basename(expanded.rstrip("/"))
+    return base in SENSITIVE_BASENAMES
+
+def cmd_is_sensitive(cmd):
+    if not cmd:
+        return False
+    return any(tok in cmd for tok in SENSITIVE_CMD_TOKENS)
 
 # Strategy 1: explicit file_path / notebook_path (Edit, Read, Write, etc.)
 path = ti.get("file_path") or ti.get("notebook_path") or ""
-if path and is_sensitive(path):
+if path_is_sensitive(path):
     pass  # fall through to allow
-# Strategy 2: Bash command string — check if it references any sensitive path
-elif ti.get("command"):
-    cmd = ti["command"]
-    sensitive_patterns = [
-        r"~/\.claude/", r"~/\.config/",
-        r"~/\.bashrc", r"~/\.bash_profile", r"~/\.profile",
-        r"~/\.zshrc", r"~/\.zprofile", r"~/\.zshenv",
-        r"~/\.gitconfig", r"~/\.npmrc", r"~/\.env\b", r"~/\.envrc",
-        r"~/\.claude\.json",
-        re.escape(home) + r"/\.claude/", re.escape(home) + r"/\.config/",
-        re.escape(home) + r"/\.bashrc", re.escape(home) + r"/\.bash_profile",
-        re.escape(home) + r"/\.profile", re.escape(home) + r"/\.zshrc",
-        re.escape(home) + r"/\.zprofile", re.escape(home) + r"/\.zshenv",
-        re.escape(home) + r"/\.gitconfig", re.escape(home) + r"/\.npmrc",
-        re.escape(home) + r"/\.env\b", re.escape(home) + r"/\.envrc",
-        re.escape(home) + r"/\.claude\.json",
-        r"\$HOME/\.claude/", r"\$HOME/\.bashrc", r"\$HOME/\.profile",
-    ]
-    if not any(re.search(p, cmd) for p in sensitive_patterns):
-        sys.exit(0)
+# Strategy 2: Bash command string — scan for any sensitive token
+elif ti.get("command") and cmd_is_sensitive(ti["command"]):
+    pass  # fall through to allow
 else:
     sys.exit(0)
 
 if event == "PreToolUse":
-    print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"auto-allow sensitive path via hook"}}))
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": "auto-allow sensitive path via bypass-claude-folder hook (substring match)",
+        }
+    }))
 elif event == "PermissionRequest":
-    print(json.dumps({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}))
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {"behavior": "allow"},
+        }
+    }))
 PY
 HOOKEOF
 chmod +x ~/bypass-claude-folder.sh
@@ -514,7 +528,7 @@ echo "OK: PermissionRequest hook installed + settings.json patched"
 EOF
 ```
 
-> **How it works**: The hook script reads the JSON payload from stdin and checks two strategies: (1) for tools with `file_path`/`notebook_path` (Edit, Read, Write, etc.), it checks if the path matches any sensitive location — `~/.claude/**`, `~/.config/**`, `~/.bashrc`, `~/.profile`, `~/.gitconfig`, `~/.npmrc`, `~/.env`, etc.; (2) for Bash commands, it regex-matches the `command` string for these same paths in all forms (`~/`, `$HOME/`, expanded absolute). If either matches, it outputs the appropriate allow JSON. If neither matches, the script exits silently and the default permission flow takes over.
+> **How it works**: The hook script reads the JSON payload from stdin and checks two strategies: (1) for tools with `file_path`/`notebook_path` (Edit, Read, Write, etc.), it checks whether the path contains a sensitive directory component (`/.claude/`, `/.config/`) **anywhere** in the path, OR has a sensitive basename (`.bashrc`, `.profile`, `.gitconfig`, `.npmrc`, `.env`, `.envrc`, `.claude.json`, etc.); (2) for Bash commands, it scans the command string for the same paths as `/`-anchored or `~/`-anchored tokens. If either matches, it outputs the appropriate allow JSON. If neither matches, the script exits silently and the default permission flow takes over. **Substring (not prefix) matching is essential** so that project-nested directories like `<workspace>/<project>/.claude/skills/knowledge/` are also covered — without this, every skill that writes into its own `.claude/` directory triggers a permission dialog the Telegram user can't dismiss.
 
 > **Re-apply after CC major upgrades.** The hook schema is a public API (documented in CC hook docs), but a major version bump could change the expected output format. After upgrading CC, verify with: `mkdir -p ~/.claude/skills/_canary && echo test > ~/.claude/skills/_canary/t.txt` then ask Claude to edit it — if no permission dialog appears and the log says "Allowed by PermissionRequest hook", the hook still works.
 
