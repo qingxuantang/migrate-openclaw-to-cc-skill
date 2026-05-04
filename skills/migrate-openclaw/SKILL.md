@@ -606,7 +606,7 @@ EOF
 
 > **Re-apply after plugin updates.** `claude plugin marketplace update` or a reinstall will overwrite `server.ts`. Re-run this step whenever the plugin is updated. A `.bak` copy is preserved on first run.
 >
-> **If running as root** (e.g. Gali-style deployments), the path is `/root/.claude/...` and the command above still works because `$HOME` is `/root` for root.
+> **If running as root** (e.g. root-user deployments), the path is `/root/.claude/...` and the command above still works because `$HOME` is `/root` for root.
 
 ### Step 11 — 🟡 AUTO-FIRST: Create the startup script with tokens
 

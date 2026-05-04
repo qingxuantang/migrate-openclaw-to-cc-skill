@@ -402,7 +402,7 @@ EOF
 
 This guard cannot be bypassed via settings. However, Claude Code's **PermissionRequest hook** fires when the guard is about to display the prompt. If the hook returns `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, the prompt is skipped entirely. Claude Code logs `Allowed by PermissionRequest hook` as an audit trail.
 
-**Discovery details**: The guard's implementation was reverse-engineered from `cli.js` on 2026-04-09. The constants `NG8="/.claude/**"` and `yG8="~/.claude/**"` define the protected globs. A PreToolUse hook can bypass the guard for Read operations but **not** for Edit/Write (log: "Hook approved tool use for Edit, but ask rule requires prompt"). Only PermissionRequest hooks have sufficient priority to override the ask rule. Verified on four production servers (MM, APPSHIP, MIAH, Gali).
+**Discovery details**: The guard's implementation was reverse-engineered from `cli.js` on 2026-04-09. The constants `NG8="/.claude/**"` and `yG8="~/.claude/**"` define the protected globs. A PreToolUse hook can bypass the guard for Read operations but **not** for Edit/Write (log: "Hook approved tool use for Edit, but ask rule requires prompt"). Only PermissionRequest hooks have sufficient priority to override the ask rule. Verified on four independent production deployments.
 
 ```bash
 $SSH_CMD bash -s << 'EOF'
@@ -481,7 +481,7 @@ EOF
 
 ### Step 7d: Install Telegram routing enforcement hook (prevent silent drops)
 
-**Why**: After multiple `compact` cycles, Claude frequently "forgets" to call the `plugin:telegram:telegram - reply` MCP tool for Telegram messages — it generates a full response in the terminal that the Telegram user never sees. This happens even when the channel routing rule is written at the **top** of both `~/CLAUDE.md` and `~/.claude/CLAUDE.md`. The root cause is that `compact` summaries don't preserve CLAUDE.md instructions, and the model's attention drifts in long contexts. Observed on all four production servers (Gali, MM, Appship, Miah) — **every server eventually hits this silent-drop bug**.
+**Why**: After multiple `compact` cycles, Claude frequently "forgets" to call the `plugin:telegram:telegram - reply` MCP tool for Telegram messages — it generates a full response in the terminal that the Telegram user never sees. This happens even when the channel routing rule is written at the **top** of both `~/CLAUDE.md` and `~/.claude/CLAUDE.md`. The root cause is that `compact` summaries don't preserve CLAUDE.md instructions, and the model's attention drifts in long contexts. Observed on all four independent production deployments — **every deployment eventually hits this silent-drop bug**.
 
 CLAUDE.md rules are best-effort (model must "remember" them). Hooks are code-level (execute deterministically). This step uses a **`UserPromptSubmit` hook** that fires every time a message enters the session. If the message contains a Telegram channel marker (`← telegram`), the hook injects `additionalContext` directly into the model's input, forcing it to see the routing instruction **in the same turn**, regardless of what was compacted away.
 
@@ -600,9 +600,9 @@ EOF
 
 ### Step 9b: Install Channel Routing Rule into BOTH CLAUDE.md files (MANDATORY)
 
-**Why**: Without this rule, Claude often generates a reply in the terminal but **forgets to call the `plugin:telegram:telegram - reply` MCP tool**, so the Telegram user sees nothing — a silent failure mode observed in real deployments (Gali, MM, APPSHIP all hit it). This step is **not optional**: every Telegram-channel deployment must end with this rule installed and the session restarted.
+**Why**: Without this rule, Claude often generates a reply in the terminal but **forgets to call the `plugin:telegram:telegram - reply` MCP tool**, so the Telegram user sees nothing — a silent failure mode observed across multiple production deployments. This step is **not optional**: every Telegram-channel deployment must end with this rule installed and the session restarted.
 
-**Why both files**: Claude Code loads two layers of CLAUDE.md — `~/.claude/CLAUDE.md` (user-level, always loaded) and `~/CLAUDE.md` or `<cwd>/CLAUDE.md` (project-level, loaded based on launch directory). On long-running sessions, the model can re-Read the user-level file mid-session (e.g. when the agent introspects its own configuration), which then becomes the dominant authority in context. If the rule is **only** in the project-level file, it gets effectively shadowed and the silent-drop bug returns. **Observed at Gali on 2026-04-08**: a session that worked for ~1 day suddenly stopped routing Telegram replies through the reply tool, because the rule lived only in `/root/CLAUDE.md` while the agent was now anchored on `/root/.claude/CLAUDE.md`. The fix is to put the same rule block in **both** files.
+**Why both files**: Claude Code loads two layers of CLAUDE.md — `~/.claude/CLAUDE.md` (user-level, always loaded) and `~/CLAUDE.md` or `<cwd>/CLAUDE.md` (project-level, loaded based on launch directory). On long-running sessions, the model can re-Read the user-level file mid-session (e.g. when the agent introspects its own configuration), which then becomes the dominant authority in context. If the rule is **only** in the project-level file, it gets effectively shadowed and the silent-drop bug returns. **Observed in production**: a long-running session that worked for ~1 day suddenly stopped routing Telegram replies through the reply tool, because the rule lived only in `/root/CLAUDE.md` while the agent was now anchored on `/root/.claude/CLAUDE.md`. The fix is to put the same rule block in **both** files.
 
 Each block is fenced with HTML markers so the step is idempotent — re-running it on a server that already has the rule is a no-op, and it never duplicates or clobbers the user's other CLAUDE.md content.
 
