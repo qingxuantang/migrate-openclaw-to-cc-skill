@@ -1,0 +1,202 @@
+# Troubleshooting: cross-platform decision tree
+
+Symptoms first, then per-platform diagnostic commands. If you have a deploy that **completed without error** but Telegram is silent, follow this from the top.
+
+## Symptom: phone sends a message, no reply
+
+### Step 1: is the daemon process alive?
+
+| Platform | Command | Healthy output |
+|---|---|---|
+| Linux | `systemctl --user status claude-telegram` | `active (running)` |
+| macOS | `launchctl list \| grep com.openclaw` | both `claude-telegram` and `tg-inbox-mover` with a PID in column 1 |
+| Windows | `Get-ScheduledTask ClaudeCodeTelegramDaemon \| Get-ScheduledTaskInfo` AND `Get-Process bun,claude` | task `Running` (or Ready if no logon yet); claude.exe + 2 bun.exe processes |
+
+If missing or repeatedly failing: see Step 1b.
+
+### Step 1b: read the supervisor's log
+
+| Platform | Command |
+|---|---|
+| Linux | `journalctl --user -u claude-telegram -n 80` |
+| macOS | `tail -80 ~/Library/Logs/claude-telegram.log` |
+| Windows | `Get-ScheduledTaskInfo ClaudeCodeTelegramDaemon \| Select LastTaskResult` (codes: `267009`=running, `267011`=task exited immediately) — for stderr, run `start-claude.ps1` manually in a visible PowerShell to see the error |
+
+Common patterns:
+- `claude --version: native binary not installed` → macOS auto-update issue; see [`post-deploy-hardening.md`](./post-deploy-hardening.md) §3
+- `409 Conflict` → another long-poller (zombie bun?). `pkill -f 'bun.*server.ts'` (or Windows equivalent) and restart
+- `command not found: claude` → PATH issue in supervisor's environment; check `start-claude.{sh,ps1}` PATH setup
+- Repeated `duplicate session: claude` on macOS → death-spiral; verify wrapper script (Step 7.2) exists and KeepAlive plist references the wrapper, not tmux directly. See [`process-supervisors.md`](./process-supervisors.md) §macOS
+
+### Step 2: is the tmux session / hidden window alive? (Linux/macOS only)
+
+```bash
+tmux ls | grep claude
+tmux capture-pane -t claude -p | tail -30
+```
+
+- **No session**: on Linux this means systemd hasn't (re-)launched the unit; check Step 1. On macOS the wrapper polls every 30s and recreates; force it with `pkill -f start-claude-launchd-wrapper.sh` (KeepAlive restarts within ~10s).
+- **Session present but pane shows trust dialog** → Step 7c didn't take effect. Apply the trust patch from [`post-deploy-hardening.md`](./post-deploy-hardening.md) §1.
+- **Session present but pane shows "native binary not installed"** → see [`post-deploy-hardening.md`](./post-deploy-hardening.md) §3.
+
+For Windows: there's no tmux. The daemon runs in a hidden PowerShell window. To inspect, either:
+- Stop the task, run `start-claude.ps1` manually in a visible window
+- Or redirect daemon stdout to a log file (edit `start-claude.ps1` to add `*> "$env:USERPROFILE\claude-daemon.log"`) and `Get-Content -Tail 50`
+
+### Step 3: is claude in "Listening" state?
+
+```bash
+# Linux / macOS
+tmux capture-pane -t claude -p | grep "Listening for channel messages"
+```
+
+For Windows: run `start-claude.ps1` manually in a visible window and watch for `Listening for channel messages from: plugin:telegram@claude-plugins-official`.
+
+- **Not present, pane content looks normal** → first launch hasn't completed yet; wait 15–30s.
+- **Not present, pane is empty / stuck** → `bun server.ts` crashed. See Step 4.
+- **Present, but phone still gets no reply** → routing problem (`reply` tool not being called). See Step 5.
+
+### Step 4: is the Bun MCP server running as a child of claude?
+
+| Platform | Command |
+|---|---|
+| Linux | `pgrep -P $(pgrep -f 'claude --dangerously') bun` |
+| macOS | same as Linux |
+| Windows | `Get-WmiObject Win32_Process -Filter "Name='bun.exe'" \| Select ProcessId, ParentProcessId` — check ParentProcessId points to claude.exe |
+
+- **No bun child**: the daemon didn't pass `--channels`. Verify `start-claude.{sh,ps1}` includes `--channels plugin:telegram@claude-plugins-official`.
+- **Bun running but on Telegram side getUpdates returns 409**: another long-poller exists somewhere. Kill all bun processes with the plugin path in their cmdline, then restart the daemon.
+
+### Step 5: is the Telegram bot side healthy?
+
+```bash
+curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?limit=1&timeout=0" | head -c 200
+```
+
+| Response | Meaning |
+|---|---|
+| `"ok":true` (no `description` key) | Bot side healthy; bug is in the daemon's processing |
+| `"ok":false, "error_code":409, "description":"Conflict: ..."` | Another long-poller alive. Kill it. |
+| `"ok":false, "error_code":401, "description":"Unauthorized"` | Bot token is invalid / revoked. Regenerate via `@BotFather /revoke` then `/token`. |
+| Timeout / DNS failure | Network issue. Test `curl https://api.telegram.org/`. |
+
+### Step 6: routing — is the reply tool being called?
+
+If everything above is healthy but you still get no reply:
+
+```bash
+# Linux / macOS — find the most recent jsonl session log
+ls -t ~/.claude/projects/*/sessions/*.jsonl | head -3
+# Search for the reply tool name
+grep -c 'plugin:telegram:telegram - reply' <latest.jsonl>
+```
+
+- **Zero hits** → Claude is forgetting to call the reply tool. Re-install the CLAUDE.md rule (see [`claude-md-rules.md`](./claude-md-rules.md)) and restart the daemon. Long-session drift is a known limit (see [`post-deploy-hardening.md`](./post-deploy-hardening.md) §7).
+- **Hits present but phone sees nothing** → the tool is being called but failing silently. Check pane for the call's response; common failure: `chat_id` mismatch.
+
+For Windows: jsonl session logs live at `%USERPROFILE%\.claude\projects\<slug>\sessions\<id>.jsonl`. Same diagnostic.
+
+### Step 7: hook diagnostics
+
+If you see `PreToolUse:* hook error` repeatedly in the pane:
+
+```
+| Failed with non-blocking status code: /usr/bin/bash:
+| line 1: <some-path>: command not found
+```
+
+**Windows-specific footgun** — the registered hook command path uses backslashes. MSYS bash (which Claude Code routes hook commands through) strips `\` as escape chars. Fix: re-register hooks with forward slashes (`C:/Users/.../hook.cmd`). See `platforms/windows.md` Step 7.
+
+**Linux / macOS**: less common. Check the hook script is executable (`chmod 700`) and its first line is `#!/bin/bash`. Test stand-alone: `echo '{"hook_event_name":"PreToolUse","tool_input":{"file_path":"~/.bashrc"}}' | ~/bypass-claude-folder.sh` — should output JSON, not error.
+
+---
+
+## Symptom: Telegram uploads (image/PDF) freeze the session
+
+Discussed in detail in [`architecture-and-design.md`](./architecture-and-design.md) §"Inbox mover".
+
+Quick check: is the inbox mover running?
+
+| Platform | Command |
+|---|---|
+| Linux | `systemctl --user status tg-inbox-mover.path` → `active` |
+| macOS | `launchctl list \| grep tg-inbox-mover` → present with last-exit 0 |
+| Windows | `Get-ScheduledTask ClaudeTelegramInboxMover` → State `Running` |
+
+If not running: restart it. If running but files still freeze the session: check the destination dir exists and is writable (`~/telegram-inbox/` or `%USERPROFILE%\telegram-inbox\`).
+
+---
+
+## Symptom: `.env` token "not loaded" despite file having the token
+
+Specific to Windows where PowerShell's `Out-File -Encoding utf8` writes a BOM that `server.ts`'s regex doesn't match. See [`post-deploy-hardening.md`](./post-deploy-hardening.md) §5 (subsumed by "settings overwrite" lessons).
+
+BOM check on the `.env` file:
+
+```powershell
+$bytes = [System.IO.File]::ReadAllBytes("$env:USERPROFILE\.claude\channels\telegram\.env")
+"First 3 bytes: $($bytes[0..2] -join ',')"  # MUST NOT be 239,187,191
+```
+
+On Linux/macOS the equivalent (`hexdump -C ~/.claude/channels/telegram/.env | head -1`) should also not show `ef bb bf`, but this is rare since standard Unix tools never write BOM.
+
+Fix: rewrite the `.env` using a BOM-free method:
+
+- Linux/macOS: `echo "TELEGRAM_BOT_TOKEN=$TOKEN" > ~/.claude/channels/telegram/.env`
+- Windows: `[System.IO.File]::WriteAllText($path, "TELEGRAM_BOT_TOKEN=$TOKEN`n", [System.Text.UTF8Encoding]::new($false))`
+
+---
+
+## Symptom: daemon works but CLAUDE.md rules aren't being followed
+
+```bash
+# Verify both rule blocks are present in both files
+for F in ~/CLAUDE.md ~/.claude/CLAUDE.md ; do
+  echo "=== $F ==="
+  grep -c 'BEGIN: channel-routing-rule' $F
+  grep -c 'BEGIN: no-interactive-select-rule' $F
+done
+```
+
+Expect `1` for each rule in each file. If `0`, re-run the relevant deploy step (Step 9b / Step 10 depending on overlay).
+
+If both rules are present but the daemon still doesn't follow them: **restart the daemon** (a running daemon caches CLAUDE.md at startup; manually-edited rules don't apply until a fresh session). See [`process-supervisors.md`](./process-supervisors.md) for restart commands per platform.
+
+---
+
+## Symptom: claude session worked for hours, then suddenly stopped replying
+
+This is the **long-session drift** failure (see [`post-deploy-hardening.md`](./post-deploy-hardening.md) §7). Recovery:
+
+1. Restart the daemon — fresh session has clean attention to CLAUDE.md.
+2. Don't try to "wake it up" with another Telegram message; the drift is locked in until restart.
+3. Long-term: schedule a nightly restart via cron / `launchd` calendar interval / Task Scheduler trigger.
+
+---
+
+## Last-resort: full nuke + reinstall
+
+If diagnostics aren't converging and you want to start fresh **without losing the bot/pairing**:
+
+```bash
+# Linux
+systemctl --user stop claude-telegram tg-inbox-mover
+rm -rf ~/.claude/plugins/marketplaces/claude-plugins-official  # forces re-clone
+claude plugin install telegram@claude-plugins-official
+# then re-run skill from Step 4b (the server.ts patch)
+
+# macOS
+launchctl bootout gui/$(id -u)/com.openclaw.claude-telegram
+launchctl bootout gui/$(id -u)/com.openclaw.tg-inbox-mover
+# then same as Linux
+
+# Windows
+Stop-ScheduledTask ClaudeCodeTelegramDaemon, ClaudeTelegramInboxMover
+Get-Process bun,claude -ErrorAction SilentlyContinue | Stop-Process -Force
+Remove-Item -Recurse "$env:USERPROFILE\.claude\plugins\marketplaces\claude-plugins-official"
+# re-run plugin install + Step 4b
+```
+
+The bot token in `~/.claude/channels/telegram/.env` and the pairing state in `access.json` survive a plugin reinstall. So your bot is still paired after the nuke; you just need to re-deploy and the daemon picks up where it left off.
+
+If even this doesn't help: the issue is likely in the deploy itself (settings, hooks, env vars). Compare your `~/.claude/settings.json` against a known-good reference in the skill's `references/` directory.

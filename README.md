@@ -16,24 +16,44 @@ Open-source skills for deploying Claude Code on remote servers with Telegram int
 
 ### Skills
 
-#### 🚀 [deploy-telegram](skills/deploy-telegram/SKILL.md)
+#### 🚀 [deploy-telegram](skills/deploy-telegram/SKILL.md) — **multi-platform: Linux + macOS + Windows**
 
-Deploy Claude Code on a remote Linux server and connect it to Telegram for remote access.
+Deploy a Claude Code daemon that listens for messages over Telegram and replies through the same channel. The daemon runs as a separate process from any local interactive Claude Code (e.g. your Desktop app), sharing `~/.claude/skills/` and `~/CLAUDE.md` so personality is consistent.
 
-**What it does:**
-- Installs Node.js, Claude Code, tmux, and Bun on the server
-- Configures authentication via OAuth token
-- Installs the official Telegram channel plugin
-- Writes `settings.json` with the mandatory `channelsEnabled: true` flag
-- Creates a startup script with auto-restart loop
-- Sets up a systemd user service for auto-start on reboot
-- Handles all interactive dialogs automatically (trust folder, bypass permissions)
+Structured as a **thin core + platform overlays + shared references**:
 
-**Requirements:**
-- Linux server with SSH access
-- Telegram bot token (from @BotFather) — must be a **fresh** bot, not one already used by another tool
-- Claude OAuth token (from `claude setup-token` on a machine with a browser)
-- Server must reach: `api.telegram.org`, `github.com`, `api.anthropic.com`
+```
+skills/deploy-telegram/
+├── SKILL.md                              # Core: contract, architecture, do-not, platform router
+├── platforms/
+│   ├── linux.md                          # apt + systemd + tmux + GNU sed; remote SSH + local self-execution
+│   ├── macos.md                          # brew + launchd (wrapper pattern) + tmux + BSD sed; Desktop App scope isolation
+│   └── windows.md                        # winget + Task Scheduler + FileSystemWatcher + PowerShell hooks
+└── references/
+    ├── architecture-and-design.md        # bun-as-child-of-claude, server.ts patch, hooks, inbox mover
+    ├── claude-md-rules.md                # channel-routing-rule + no-interactive-select-rule (both universal)
+    ├── pairing-and-access.md             # /telegram:access pair + policy allowlist + access.json
+    ├── process-supervisors.md            # systemd vs launchd vs Task Scheduler comparison
+    ├── post-deploy-hardening.md          # 9 production incidents + their permanent fixes
+    └── troubleshooting.md                # cross-platform decision tree
+```
+
+**Validation status**:
+| Platform | Tested on | Status |
+|---|---|---|
+| Linux | Ubuntu 22.04 / 24.04 across 4 production servers (HK / SG / JP) | Stable since 2026-04-07 |
+| macOS | Mac mini (Darwin 24.6.0 arm64), macOS 15 (Sequoia) | Stable since 2026-05-14 with 4 hardening fixes |
+| Windows | Windows 11 Pro 26100 + Desktop app 2.1.142 + Bun 1.3.14 | End-to-end verified 2026-05-21 |
+
+**Common requirements** (universal across platforms):
+- Telegram bot token from `@BotFather /newbot` — **must be a fresh bot**
+- Network access to `api.telegram.org`, `github.com`, `api.anthropic.com` (mainland-China networks blocked)
+- Existing Claude Code authentication (Desktop app login on Windows, or `claude setup-token` token on Linux/macOS)
+
+**Platform-specific notes**:
+- **Linux**: supports both remote-SSH mode (controller agent → server) and local self-execution mode (e.g. OpenClaw migrating to CC on the same host)
+- **macOS**: requires `--scope local` plugin install to avoid Desktop App contending for the bot token (verified incident)
+- **Windows**: reuses the bundled `claude.exe` from `%APPDATA%\Claude\claude-code\<version>\` — no separate npm install needed; PowerShell hooks (no Python dependency); no tmux automation (operator dismisses first-launch dialogs at the keyboard)
 
 #### 🔄 [migrate-openclaw](skills/migrate-openclaw/SKILL.md)
 
@@ -173,24 +193,44 @@ The `migrate-openclaw` skill appends this automatically when generating `CLAUDE.
 
 ### 技能列表
 
-#### 🚀 [deploy-telegram](skills/deploy-telegram/SKILL.md) — 部署 Telegram 频道
+#### 🚀 [deploy-telegram](skills/deploy-telegram/SKILL.md) — **多平台：Linux + macOS + Windows**
 
-在远程 Linux 服务器上部署 Claude Code，并连接 Telegram 实现远程访问。
+部署一个 Claude Code daemon 进程，监听 Telegram 入站消息并通过同样的 channel 回复。Daemon 作为**独立进程**跟你本地交互用的 Claude Code（比如桌面版）**并行**运行，共享 `~/.claude/skills/` 和 `~/CLAUDE.md`，所以人格 / 技能一致，但 context 隔离、互不打扰。
 
-**功能：**
-- 在服务器上安装 Node.js、Claude Code、tmux 和 Bun
-- 通过 OAuth Token 配置身份认证
-- 安装官方 Telegram 频道插件
-- 写入带有强制 `channelsEnabled: true` 的 `settings.json`
-- 生成带自动重启循环的启动脚本
-- 配置 systemd user service 实现开机自启
-- 自动处理所有交互式对话框（trust folder、bypass permissions）
+结构是**薄核心 + 平台 overlay + 共享 references**：
 
-**前置条件：**
-- 具有 SSH 访问权限的 Linux 服务器
-- Telegram Bot Token（通过 @BotFather 创建）—— 必须是**全新的** bot，不能和其他工具共用
-- Claude OAuth Token（在有浏览器的机器上运行 `claude setup-token` 获取）
-- 服务器必须能访问：`api.telegram.org`、`github.com`、`api.anthropic.com`
+```
+skills/deploy-telegram/
+├── SKILL.md                              # 核心：契约、架构、do-not、平台路由
+├── platforms/
+│   ├── linux.md                          # apt + systemd + tmux + GNU sed；支持 remote SSH + local self-execution
+│   ├── macos.md                          # brew + launchd（wrapper 模式）+ tmux + BSD sed；Desktop App 隔离
+│   └── windows.md                        # winget + Task Scheduler + FileSystemWatcher + PowerShell hooks
+└── references/
+    ├── architecture-and-design.md        # bun 作为 claude 子进程、server.ts 补丁、hooks、inbox 搬运
+    ├── claude-md-rules.md                # channel-routing-rule + no-interactive-select-rule（两条都跨平台必装）
+    ├── pairing-and-access.md             # /telegram:access pair + policy allowlist + access.json
+    ├── process-supervisors.md            # systemd vs launchd vs Task Scheduler 对比
+    ├── post-deploy-hardening.md          # 9 个生产事故 + 永久修复
+    └── troubleshooting.md                # 跨平台诊断决策树
+```
+
+**验证状态**：
+| 平台 | 验证环境 | 状态 |
+|---|---|---|
+| Linux | Ubuntu 22.04 / 24.04，4 台生产服务器（HK / SG / JP） | 2026-04-07 以来稳定运行 |
+| macOS | Mac mini（Darwin 24.6.0 arm64）、macOS 15 Sequoia | 2026-05-14 以来稳定运行，含 4 个生产 hardening 修复 |
+| Windows | Windows 11 Pro 26100 + Desktop app 2.1.142 + Bun 1.3.14 | 2026-05-21 端到端实测通过 |
+
+**通用前置条件**（三平台共用）：
+- `@BotFather /newbot` 创建的**全新** Telegram bot token
+- 能访问 `api.telegram.org`、`github.com`、`api.anthropic.com`（大陆网络过不了）
+- 已有 Claude Code 认证（Windows：Desktop app 登录态；Linux/macOS：`claude setup-token` 获取 token）
+
+**平台特有要点**：
+- **Linux**：支持远端 SSH 模式（控制端 agent → 服务器）和本地 self-execution 模式（例如 OpenClaw 在原机迁移到 CC）
+- **macOS**：必须用 `--scope local` 装插件以避免 Desktop App 抢 bot token（生产事故已验证）
+- **Windows**：复用 Desktop app 自带的 `claude.exe`（路径 `%APPDATA%\Claude\claude-code\<version>\`），不需要单独装 CLI；PowerShell hooks（不依赖 Python）；不做 tmux 仿真——首次对话框由 operator 在键盘前手动按掉
 
 #### 🔄 [migrate-openclaw](skills/migrate-openclaw/SKILL.md) — 迁移 OpenClaw
 
